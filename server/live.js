@@ -1,5 +1,9 @@
 import { archivesGet, nseGet } from "./nse.js";
 import * as seed from "./market.js";
+import { bhavDailyBars, bhavSearch } from "./bhavcopy.js";
+
+// BHAV_ONLY=1 skips the www.nseindia.com APIs for charts and search.
+const BHAV_ONLY = process.env.BHAV_ONLY === "1";
 
 function num(v) {
   if (v == null || v === "-") return null;
@@ -406,7 +410,11 @@ export async function refreshQuoteBook() {
 export async function liveSearch(q) {
   const { nseSearch } = await import("./nseClient.js");
   try {
-    return await nseSearch(q);
+    if (!BHAV_ONLY) {
+      const results = await nseSearch(q);
+      if (results.length) return results;
+    }
+    return await bhavSearch(q);
   } catch {
     await refreshQuoteBook();
     const n = String(q || "").trim().toLowerCase();
@@ -430,8 +438,18 @@ function maxDays(tf) {
   return 3650;
 }
 
+async function dailyBars(slug, days) {
+  if (BHAV_ONLY) return bhavDailyBars(slug, days);
+  const { nseDailyBars } = await import("./nseClient.js");
+  try {
+    return await nseDailyBars(slug, days);
+  } catch {
+    return bhavDailyBars(slug, days);
+  }
+}
+
 export async function liveChart(slug, tf = "1D", days) {
-  const { nseDailyBars, nseIntradayBars, toMonthlyBars, withMovingAverages } = await import("./nseClient.js");
+  const { nseIntradayBars, toMonthlyBars, withMovingAverages } = await import("./nseClient.js");
   const key = String(tf || "1D").toUpperCase();
   const want = Math.min(Math.max(Number(days) || defaultDays(key), 20), maxDays(key));
   const cacheKey = `${String(slug).toUpperCase()}|${key}`;
@@ -443,11 +461,11 @@ export async function liveChart(slug, tf = "1D", days) {
     pack = await nseIntradayBars(slug, 60, want);
     chartMem.set(cacheKey, { days: want, pack });
   } else if (key === "1M") {
-    const daily = await nseDailyBars(slug, want);
+    const daily = await dailyBars(slug, want);
     pack = { ...daily, bars: toMonthlyBars(daily.bars), interval: "1M", source: `${daily.source} · monthly` };
     chartMem.set(cacheKey, { days: want, pack });
   } else {
-    pack = { ...(await nseDailyBars(slug, want)), interval: "1D" };
+    pack = { ...(await dailyBars(slug, want)), interval: "1D" };
     chartMem.set(cacheKey, { days: want, pack });
   }
   const last = pack.bars[pack.bars.length - 1];
